@@ -1,0 +1,128 @@
+version: '3'
+
+services:
+  django:
+    build: ./core
+    restart: always
+    volumes:
+      - ./core/staticfiles:/app/staticfiles
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings
+
+      DEBUG: ${DEBUG}
+      
+      MYSQL_HOST: ${MYSQL_HOST}
+      MYSQL_PORT: ${MYSQL_PORT}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+
+      BOT_TOKEN: ${BOT_TOKEN}
+      SECRET_KEY: ${SECRET_KEY}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+
+  nginx:
+      image: nginx:latest
+      restart: always
+      depends_on:
+      - django
+      ports:
+        - "80:80"
+        - "443:443"
+      volumes:
+        - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+        - ./core/staticfiles:/app/staticfiles
+
+        - ./nginx/cert.pem:/etc/letsencrypt/live/duels.me/cert.pem
+        - ./nginx/key.pem:/etc/letsencrypt/live/duels.me/key.pem
+        - ./nginx/options-ssl-nginx.conf:/etc/letsencrypt/options-ssl-nginx.conf:ro
+      networks:
+        - default
+
+  certbot:
+    ports:
+      - "81:80"
+    env_file:
+      - .env
+    volumes:
+      - ./nginx/:/etc/nginx/
+    depends_on:
+      - nginx
+    build:
+      context: ./certbot
+      dockerfile: Dockerfile
+      args:
+        DOMAIN_EMAIL: ${DOMAIN_EMAIL}
+        DOMAIN_URL: ${DOMAIN_URL}
+
+  mysql:
+    image: mysql:latest
+    restart: always
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_ROOT_HOST: 172.*.*.*
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  redis:
+    image: redis:latest
+    restart: always
+
+  bot: 
+    build: ./bot
+    env_file:
+      - .env
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      HOST: ${HOST}
+      DEBUG: ${DEBUG}
+    depends_on:
+      - django
+      - nginx
+    healthcheck:
+      test: ["CMD", "python", "bot.py"]
+
+networks:
+  default:
+    driver: bridge
+
+
+volumes:
+  certbot_conf:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/certbot/conf
+      o: bind
+  certbot_www:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/certbot/www
+      o: bind
+  nginx_conf:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/nginx/nginx.conf
+      o: bind
